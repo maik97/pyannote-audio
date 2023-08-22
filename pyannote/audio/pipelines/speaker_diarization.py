@@ -127,6 +127,10 @@ class SpeakerDiarization(SpeakerDiarizationMixin, Pipeline):
         self.segmentation_model = segmentation
         model: Model = get_model(segmentation, use_auth_token=use_auth_token)
 
+        self.segmentation_batch_size = segmentation_batch_size
+        self.segmentation_duration = (
+            segmentation_duration or model.specifications.duration
+        )
         self.segmentation_step = segmentation_step
 
         self.embedding = embedding
@@ -137,35 +141,32 @@ class SpeakerDiarization(SpeakerDiarizationMixin, Pipeline):
 
         self.der_variant = der_variant or {"collar": 0.0, "skip_overlap": False}
 
-        segmentation_duration = model.specifications.duration
+        seg_device, emb_device = 'cuda', 'cuda'
+
+        model.to(seg_device)
+
         self._segmentation = Inference(
             model,
-            duration=segmentation_duration,
-            step=self.segmentation_step * segmentation_duration,
+            duration=self.segmentation_duration,
+            step=self.segmentation_step * self.segmentation_duration,
             skip_aggregation=True,
-            batch_size=segmentation_batch_size,
+            batch_size=self.segmentation_batch_size,
         )
-        self._frames: SlidingWindow = self._segmentation.model.example_output.frames
+        self._frames: SlidingWindow = self._segmentation.model.introspection.frames
 
-        if self._segmentation.model.specifications.powerset:
-            self.segmentation = ParamDict(
-                min_duration_off=Uniform(0.0, 1.0),
-            )
-
-        else:
-            self.segmentation = ParamDict(
-                threshold=Uniform(0.1, 0.9),
-                min_duration_off=Uniform(0.0, 1.0),
-            )
+        self.segmentation = ParamDict(
+            threshold=Uniform(0.1, 0.9),
+            min_duration_off=Uniform(0.0, 1.0),
+        )
 
         if self.klustering == "OracleClustering":
             metric = "not_applicable"
 
         else:
             self._embedding = PretrainedSpeakerEmbedding(
-                self.embedding, use_auth_token=use_auth_token
+                self.embedding, device=emb_device, use_auth_token=use_auth_token
             )
-            self._audio = Audio(sample_rate=self._embedding.sample_rate, mono="downmix")
+            self._audio = Audio(sample_rate=self._embedding.sample_rate, mono=True)
             metric = self._embedding.metric
 
         try:
